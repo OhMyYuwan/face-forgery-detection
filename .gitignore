@@ -1,0 +1,68 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+
+# Distribution / packaging
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# PyTorch weights
+*.pth
+*.pt
+*.bin
+*.ckpt
+*.safetensors
+
+# Jupyter Notebook
+.ipynb_checkpoints
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Environment
+.env
+.venv
+env/
+venv/
+
+# Datasets (local)
+datasets/train
+datasets/test
+
+# Model files (download from HF)
+OhMyYuwan/face-forgery-detection
+
+# Logs and runtime
+logs/
+*.log
+*.pid
+Space/.app.pid
+
+# Evaluation outputs
+results/
+
