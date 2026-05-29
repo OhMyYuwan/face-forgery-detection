@@ -1,6 +1,11 @@
 # Face Forgery Detection
 
-Image forgery detection system for the TIFS2026 project.
+<div align="center">
+  <img src="assets/github-header-banner.png" alt="SuperLeaf Banner" width="100%">
+</div>
+
+
+Image forgery detection system.
 
 ## HuggingFace Resources
 
@@ -35,6 +40,10 @@ face-forgery-detection/
 │   │   ├── optimize_thresholds.py
 │   │   └── view_results.py
 │   └── train/
+│       ├── train_face_forgery.py
+│       ├── train_natural_trace.py
+│       ├── run.sh
+│       └── run_stage2.sh
 ├── Space/                     # Gradio demo application
 │   ├── app.py
 │   ├── compat_patches.py
@@ -130,6 +139,121 @@ model.eval()
 with torch.no_grad():
     _, det = model.forward_det(image_tensor)
     score = torch.sigmoid(det).item()
+```
+
+## Training Scripts
+
+All training scripts are located in [scripts/train/](scripts/train/). The framework adopts a **two-stage** strategy: first learn homogeneous features from real images, then train the forgery detector on real/fake pairs.
+
+| Script | 功能 | 用法 | 输出 |
+|--------|------|------|------|
+| [scripts/train/train_face_forgery.py](scripts/train/train_face_forgery.py) | 两阶段训练主脚本（Stage 1 表示学习 + Stage 2 伪造检测） | `python scripts/train/train_face_forgery.py --gpu 0 --dataset_root <path> --backbone <name>` | `<savepath>/stage1_models_<backbone>/` + `<savepath>/stage2_detnet_enhance/path_models_<backbone>/` |
+| [scripts/train/train_natural_trace.py](scripts/train/train_natural_trace.py) | 训练基础组件（`OurNet`、`SupConLoss`、数据增强、LR 调度等），被主脚本导入 | 不直接运行 | - |
+| [scripts/train/run.sh](scripts/train/run.sh) | 端到端启动 Stage 1 + Stage 2 完整训练 | `bash scripts/train/run.sh` | `log/xinyuan_MambaVision_gpu<id>.log` + 模型权重 |
+| [scripts/train/run_stage2.sh](scripts/train/run_stage2.sh) | 仅启动 Stage 2，基于已有 Stage 1 预训练模型 | `bash scripts/train/run_stage2.sh` | 同上 |
+
+### Two-Stage Training Pipeline
+
+**Stage 1 — 表征学习（Representation Learning）**
+
+仅使用真实图像，通过三项联合损失让主干网络学到"真实人脸"的同质化表征：
+
+- `SupConLoss`：异构特征对比损失（同图两种增强视图互为正样本）
+- `MSELoss`：同质特征与 batch 内锚点 (anchor) 的一致性约束
+- `CosineEmbeddingLoss`：异构与同质特征的正交性约束（权重 0.1）
+
+主干与投影头使用差分学习率（`stage1_lr` vs `stage1_head_lr`），默认 200 epochs。
+
+**Stage 2 — 伪造检测（Forgery Detection）**
+
+加载 Stage 1 权重，冻结辅助投影头 (`aux_fc1`、`aux_fc2`)，对每个 deepfake 方法构造 real/fake 对。损失由两部分组合：
+
+- `SupConLoss`：基于真伪标签的有监督对比损失（权重 1.0）
+- `BCEWithLogitsLoss`：二分类检测损失（权重 0.5）
+
+主干 + `det_fc1` 使用极小微调学习率（`1e-5`），分类头 `det_fc2` 使用 `stage2_lr`（默认 `1e-2`），避免大幅扰动 Stage 1 学到的表征。
+
+### Dataset Layout
+
+训练脚本期望以下目录结构（对应 `--dataset_root`）：
+
+```
+<dataset_root>/
+├── <method_1>/
+│   ├── 0_real/
+│   └── 1_fake/
+├── <method_2>/
+│   ├── 0_real/
+│   └── 1_fake/
+└── ...
+```
+
+`--deepfake_methods` 接受 `all`（自动发现）或逗号分隔的子集（如 `progan,stylegan2`）。每个方法的图像按文件名排序后取前 90% 作训练、后 10% 作测试，防止数据泄漏。
+
+### Training Workflow
+
+**1. 修改 `run.sh` 中的用户配置区域**
+
+```bash
+GPU_IDS=("0")                          # GPU 列表
+DATASET_ROOT="/path/to/your/dataset"
+DEEPFAKE_METHODS="all"                 # 或 "progan,stylegan2,..."
+SAVE_PATH="/path/to/save/checkpoints"
+BACKBONE="mambavision_t"               # 见 Models 表格
+```
+
+**2. 启动两阶段完整训练**
+
+```bash
+cd scripts/train
+bash run.sh
+```
+
+**3. 仅执行 Stage 2（已有 Stage 1 权重）**
+
+修改 `run_stage2.sh` 中的 `STAGE1_MODEL` 指向 Stage 1 产出的 `.pth`，然后：
+
+```bash
+bash run_stage2.sh
+```
+
+**4. 监控训练**
+
+```bash
+tail -f log/xinyuan_MambaVision_gpu*.log   # 实时日志
+watch -n 1 nvidia-smi                       # GPU 状态
+```
+
+### Key Hyperparameters
+
+| 参数 | 默认值 | 说明 |
+|------|--------|------|
+| `--stage1_epochs` | 200 | Stage 1 训练轮数 |
+| `--stage1_lr` / `--stage1_head_lr` | `5e-5` / `0.01` | 主干 / 投影头学习率 |
+| `--stage2_epochs` | 100 | Stage 2 训练轮数 |
+| `--stage2_lr` | `0.01` | 分类头 `det_fc2` 学习率（主干微调固定 `1e-5`） |
+| `--lambda_aux` | 0.3 | 辅助对比损失权重（CLI 参数，最终代码采用 1.0/0.5 固定组合） |
+| `--temperature` | 0.1 | SupCon 温度 |
+| `--img_size` | 224 | 输入分辨率（`internvit_300m` 需改为 448） |
+| `--eval_interval` | 10 | Stage 2 每 N 个 epoch 完整评估一次 |
+| `--cosine` | `false` | 启用余弦退火学习率调度 |
+
+### Output Files
+
+```
+<savepath>/gpu<id>/
+├── stage1_models_<backbone>/
+│   ├── best_model.pth          # Stage 1 训练损失最低的权重
+│   ├── ckpt_epoch_50.pth       # 每 50 epoch 一次的快照
+│   └── final_epoch.pth
+├── stage1_tensorboard_<backbone>/
+└── stage2_detnet_enhance/
+    ├── path_models_<backbone>/
+    │   ├── best_model.pth      # Stage 2 训练损失最低
+    │   ├── best_model_acc.pth  # Stage 2 验证准确率最高（推荐用于推理）
+    │   ├── ckpt_epoch_20.pth
+    │   └── final_epoch.pth
+    └── path_tensorboard_<backbone>/
 ```
 
 ## Evaluation Scripts
