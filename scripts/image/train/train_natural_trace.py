@@ -348,7 +348,7 @@ class Aux2dataset(Dataset):
             sample = self.transform(img)
         return (sample, label)
 
-LOCAL_MODEL_PATH = "/zyy/TIFS2026/yuwanz/pretrained_weights/fastervit_2_224_1k.pth.tar"
+LOCAL_MODEL_PATH = "pretrained_weights/fastervit_2_224_1k.pth.tar"
 
 # # ============== Model Architectures ==============
 # class OurNet(nn.Module):
@@ -469,7 +469,7 @@ class OurNet(nn.Module):
         elif 'MambaVision' in backbone:
             # 【新增】MambaVision 初始化逻辑
             print(f"Loading MambaVision backbone: {backbone}")
-            self.backbone = AutoModel.from_pretrained("/zyy/TIFS2026/yuwanz/MambaVision/MambaVision-T-1k", trust_remote_code=True)
+            self.backbone = AutoModel.from_pretrained("pretrained_weights/MambaVision-T-1k", trust_remote_code=True)
             
             # 【修复点】Mamba 底层算子强制要求在 GPU 运行，因此临时把模型和数据放到 CUDA 上
             self.backbone = self.backbone.cuda()
@@ -557,7 +557,7 @@ class ProjNet(nn.Module):
         self.backbone = timm.create_model(
             backbone, 
             pretrained=False, 
-            checkpoint_path='/zyy/TIFS2026/yuwanz/pretrained_weights/inception_next_base.bin'
+            checkpoint_path='pretrained_weights/inception_next_base.bin'
         )
         
         if hasattr(self.net, "fc"):  # ResNet
@@ -600,7 +600,7 @@ class DetNet(nn.Module):
         self.backbone = timm.create_model(
             backbone, 
             pretrained=False, 
-            checkpoint_path='/zyy/TIFS2026/yuwanz/pretrained_weights/inception_next_base.bin'
+            checkpoint_path='pretrained_weights/inception_next_base.bin'
         )
         
         if hasattr(self.net, "fc"):  # ResNet

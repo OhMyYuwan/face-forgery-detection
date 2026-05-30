@@ -51,11 +51,12 @@ env/
 venv/
 
 # Datasets (local)
-datasets/train
-datasets/test
+datasets/image
+datasets/audio
 
 # Model files (download from HF)
 OhMyYuwan/face-forgery-detection
+OhMyYuwan/audio-forgery-detection
 
 # Logs and runtime
 logs/
@@ -66,3 +67,13 @@ Space/.app.pid
 # Evaluation outputs
 results/
 
+# backend files
+Space_test/
+Space_backend/
+
+space_manager_backend.sh
+space_manager_xudong.sh
+.gitignore
+test_lipfd_video.py
+
+.gradio/certificate.pem
