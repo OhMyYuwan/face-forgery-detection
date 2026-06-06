@@ -144,7 +144,7 @@ All image training scripts are located in [scripts/image/train/](scripts/image/t
 
 **Stage 1 — 表征学习（Representation Learning）**
 
-仅使用真实图像，通过三项联合损失让主干网络学到"真实人脸"的同质化表征：
+让主干网络学到"真实人脸"的特有自然痕迹表征：
 
 - `SupConLoss`：异构特征对比损失（同图两种增强视图互为正样本）
 - `MSELoss`：同质特征与 batch 内锚点 (anchor) 的一致性约束
@@ -154,12 +154,12 @@ All image training scripts are located in [scripts/image/train/](scripts/image/t
 
 **Stage 2 — 伪造检测（Forgery Detection）**
 
-加载 Stage 1 权重，冻结辅助投影头 (`aux_fc1`、`aux_fc2`)，对每个 deepfake 方法构造 real/fake 对。损失由两部分组合：
+加载 Stage 1 权重，对每个 deepfake 方法构造 real/fake 对。损失由两部分组合：
 
 - `SupConLoss`：基于真伪标签的有监督对比损失（权重 1.0）
 - `BCEWithLogitsLoss`：二分类检测损失（权重 0.5）
 
-主干 + `det_fc1` 使用极小微调学习率（`1e-5`），分类头 `det_fc2` 使用 `stage2_lr`（默认 `1e-2`），避免大幅扰动 Stage 1 学到的表征。
+主干 + `det_fc1` 使用极小微调学习率（`1e-5`），分类头 `det_fc2` 使用 `stage2_lr`（默认 `1e-2`），避免大幅扰动 Stage 1 学到的自然痕迹表征。
 
 ### Dataset Layout
 
