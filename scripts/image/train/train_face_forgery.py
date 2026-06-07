@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """
-Face Forgery Detection Training Script
+Generic Face Forgery Detection Training Template
 
-Two-stage training:
+Three-stage training without changing model structure:
 Stage 1: Learn homogeneous features from real images (representation learning)
-Stage 2: Train forgery detector using real/fake pairs
+Stage 2: Feature selection by fine-tuning existing det_fc1 weights only
+Stage 3: Train forgery detector using the original forward_det path
 """
 
 import os
@@ -48,14 +49,14 @@ def get_args():
     # Basic config
     parser.add_argument('--gpu', type=str, default='0')
     parser.add_argument('--seed', type=int, default=42)
-    parser.add_argument('--savepath', type=str, default='results/image')
+    parser.add_argument("--savepath", type=str, default="your_save_path")
     parser.add_argument('--stage1_model', type=str, default='')
     
     # Dataset config - Face-specific
-    parser.add_argument('--dataset_root', type=str, required=True,
-                        help='Dataset root directory, e.g., /zyy/TIFS2026/datasets/NTF/test')
-    parser.add_argument('--deepfake_methods', type=str, default='all',
-                        help='Deepfake methods to use (comma-separated or "all")')
+    parser.add_argument('--dataset_root', type=str, default='your_dataset_root',
+                        help='Dataset root directory, e.g., your_dataset_root')
+    parser.add_argument('--deepfake_methods', type=str, default='your_deepfake_methods',
+                        help='Deepfake methods to use: "all" or comma-separated method names')
     parser.add_argument('--use_face_dataset', action='store_true', default=True,
                         help='Use face dataset structure (deepfake_method/0_real, 1_fake)')
     
@@ -66,7 +67,7 @@ def get_args():
                         help='[Deprecated] Legacy classes for class-based dataset')
     
     # Model config
-    parser.add_argument('--backbone', type=str, default='inception_next_base')
+    parser.add_argument('--backbone', type=str, default='your_model')
     
     # Stage 1 config (representation learning)
     parser.add_argument('--stage1_epochs', type=int, default=50)
@@ -76,14 +77,42 @@ def get_args():
     parser.add_argument('--stage1_momentum', type=float, default=0.9)
     parser.add_argument('--stage1_weight_decay', type=float, default=1e-4)
     
-    # Stage 2 config (forgery detection)
-    parser.add_argument('--stage2_epochs', type=int, default=50)
+    # Stage 2 config (weight-only core feature selection)
+    parser.add_argument('--stage2_epochs', type=int, default=20)
     parser.add_argument('--stage2_batch_size', type=int, default=16)
-    parser.add_argument('--stage2_lr', type=float, default=0.01)
+    parser.add_argument('--stage2_lr', type=float, default=1e-4,
+                        help='Learning rate for det_fc1 during feature selection')
+    parser.add_argument('--stage2_lr_backbone', type=float, default=1e-6,
+                        help='Backbone LR if --stage2_update_backbone is enabled')
     parser.add_argument('--stage2_momentum', type=float, default=0.9)
     parser.add_argument('--stage2_weight_decay', type=float, default=1e-4)
-    parser.add_argument('--lambda_aux', type=float, default=0.3, 
-                        help='Weight for auxiliary contrastive loss in stage 2')
+    parser.add_argument('--stage2_update_backbone', action='store_true',
+                        help='Fine-tune backbone during feature selection')
+    parser.add_argument('--selection_contrast_weight', type=float, default=1.0,
+                        help='SupCon weight for current Stage 2 real/fake homo features')
+    parser.add_argument('--selection_real_compact_weight', type=float, default=0.2,
+                        help='Weak margin constraint: current real homo should remain reasonably compact')
+    parser.add_argument('--selection_real_view_weight', type=float, default=0.2,
+                        help='Weak margin constraint: real augmentations should remain reasonably consistent')
+    parser.add_argument('--selection_fake_proto_weight', type=float, default=1.5,
+                        help='Penalize fake alignment with the current real-shared homo direction')
+    parser.add_argument('--selection_real_compact_margin', type=float, default=0.4,
+                        help='Allowed real compactness loss before Stage 2 penalizes it')
+    parser.add_argument('--selection_real_view_margin', type=float, default=0.4,
+                        help='Allowed real view-consistency loss before Stage 2 penalizes it')
+    parser.add_argument('--selection_fake_margin', type=float, default=0.1,
+                        help='Cosine margin for fake-to-real-shared homo alignment')
+    parser.add_argument('--selection_retain_weight', type=float, default=0.05,
+                        help='Reward for dimensions stronger in real than fake')
+
+    # Stage 3 config (forgery detection)
+    parser.add_argument('--stage3_epochs', type=int, default=50)
+    parser.add_argument('--stage3_lr', type=float, default=0.01)
+    parser.add_argument('--stage3_momentum', type=float, default=0.9)
+    parser.add_argument('--stage3_weight_decay', type=float, default=1e-4)
+    parser.add_argument('--stage3_lr_backbone', type=float, default=1e-5)
+    parser.add_argument('--lambda_aux', type=float, default=0.3,
+                        help='Weight for auxiliary contrastive loss in stage 3')
     
     # Optimizer config
     parser.add_argument('--cosine', action='store_true', default=False)
@@ -102,9 +131,28 @@ def get_args():
     
     # Evaluation config
     parser.add_argument('--eval_interval', type=int, default=20,
-                        help='Evaluate every N epochs in Stage 2')
+                        help='Evaluate every N epochs in Stage 3')
     
     return parser.parse_args()
+
+
+def validate_template_args(args):
+    placeholders = {
+        'dataset_root': 'your_dataset_root',
+        'deepfake_methods': 'your_deepfake_methods',
+        'backbone': 'your_model',
+        'savepath': 'your_save_path',
+    }
+    missing = [
+        name for name, placeholder in placeholders.items()
+        if getattr(args, name) == placeholder
+    ]
+    if missing:
+        fields = ', '.join(missing)
+        raise ValueError(
+            f"Please set template fields before training: {fields}. "
+            "Edit run.sh or pass explicit command-line arguments."
+        )
 
 
 def set_seed(seed):
@@ -137,6 +185,38 @@ def discover_deepfake_methods(dataset_root: str) -> List[str]:
     methods.sort()
     return methods
 
+
+# ============== Face-specific Dataset Classes ==============
+# class FaceRealDataset(Dataset):
+#     """
+#     Stage 1: Load real face images from multiple deepfake methods
+#     """
+#     def __init__(self, dataset_root: str, deepfake_methods: List[str], transform=None):
+#         self.transform = transform
+#         self.images = []
+        
+#         for method in deepfake_methods:
+#             real_path = os.path.join(dataset_root, method, '0_real')
+#             if os.path.exists(real_path):
+#                 for ext in ['*.jpg', '*.jpeg', '*.png', '*.bmp', '*.JPEG', '*.JPG', '*.PNG']:
+#                     self.images.extend(glob.glob(os.path.join(real_path, '**', ext), recursive=True))
+        
+#         print(f"[FaceRealDataset] Loaded {len(self.images)} real face images from {len(deepfake_methods)} methods")
+
+#     def __len__(self):
+#         return len(self.images)
+
+#     def __getitem__(self, idx):
+#         img_path = self.images[idx]
+#         image = Image.open(img_path).convert('RGB')
+        
+#         if self.transform:
+#             image = self.transform(image)
+        
+#         return image, 0  # label=0 for real
+
+
+# ============== Face-specific Dataset Classes ==============
 class FaceRealDataset(Dataset):
     """
     Stage 1 & Stage 2 Aux: Load real face images from multiple deepfake methods
@@ -173,6 +253,38 @@ class FaceRealDataset(Dataset):
         if self.transform:
             image = self.transform(image)
         return image, 0  # label=0 for real
+
+
+# class FaceForgeryDataset(Dataset):
+#     """
+#     Stage 2: Load real and fake face images from specific deepfake method
+#     """
+#     def __init__(self, dataset_root: str, deepfake_method: str, is_real: bool, transform=None):
+#         self.transform = transform
+#         self.label = 0 if is_real else 1
+#         self.images = []
+        
+#         subdir = '0_real' if is_real else '1_fake'
+#         data_path = os.path.join(dataset_root, deepfake_method, subdir)
+        
+#         if os.path.exists(data_path):
+#             for ext in ['*.jpg', '*.jpeg', '*.png', '*.bmp', '*.JPEG', '*.JPG', '*.PNG']:
+#                 self.images.extend(glob.glob(os.path.join(data_path, '**', ext), recursive=True))
+        
+#         label_str = "real" if is_real else "fake"
+#         print(f"[FaceForgeryDataset] Loaded {len(self.images)} {label_str} images from {deepfake_method}")
+
+#     def __len__(self):
+#         return len(self.images)
+
+#     def __getitem__(self, idx):
+#         img_path = self.images[idx]
+#         image = Image.open(img_path).convert('RGB')
+        
+#         if self.transform:
+#             image = self.transform(image)
+        
+#         return image, self.label
 
 class FaceForgeryDataset(Dataset):
     """
@@ -213,6 +325,54 @@ class FaceForgeryDataset(Dataset):
         if self.transform:
             image = self.transform(image)
         return image, self.label
+
+
+# class FaceDetDataset(Dataset):
+#     """
+#     Stage 2: Dataset for detection training with dual transforms
+#     Returns: (contrastive_views, supervised_view, label)
+#     """
+#     def __init__(self, dataset_root: str, deepfake_method: str, 
+#                  contrastive_transform=None, supervised_transform=None):
+#         self.contrastive_transform = contrastive_transform
+#         self.supervised_transform = supervised_transform
+#         self.samples = []
+        
+#         # Load real images
+#         real_path = os.path.join(dataset_root, deepfake_method, '0_real')
+#         if os.path.exists(real_path):
+#             for ext in ['*.jpg', '*.jpeg', '*.png', '*.bmp', '*.JPEG', '*.JPG', '*.PNG']:
+#                 files = glob.glob(os.path.join(real_path, '**', ext), recursive=True)
+#                 self.samples.extend([(f, 0) for f in files])
+        
+#         # Load fake images
+#         fake_path = os.path.join(dataset_root, deepfake_method, '1_fake')
+#         if os.path.exists(fake_path):
+#             for ext in ['*.jpg', '*.jpeg', '*.png', '*.bmp', '*.JPEG', '*.JPG', '*.PNG']:
+#                 files = glob.glob(os.path.join(fake_path, '**', ext), recursive=True)
+#                 self.samples.extend([(f, 1) for f in files])
+        
+#         print(f"[FaceDetDataset] Loaded {len(self.samples)} samples from {deepfake_method}")
+    
+#     def __len__(self):
+#         return len(self.samples)
+    
+#     def __getitem__(self, idx):
+#         img_path, label = self.samples[idx]
+#         image = Image.open(img_path).convert('RGB')
+        
+#         # Apply transforms
+#         if self.contrastive_transform:
+#             contrastive_views = self.contrastive_transform(image)
+#         else:
+#             contrastive_views = (image, image)
+        
+#         if self.supervised_transform:
+#             supervised_view = self.supervised_transform(image)
+#         else:
+#             supervised_view = image
+        
+#         return contrastive_views, supervised_view, label
 
 class FaceDetDataset(Dataset):
     """
@@ -343,9 +503,179 @@ def train_stage1(train_loader, model, criterion_selfcon, criterion_mse, criterio
     return losses.avg
 
 
-# ============== Stage 2: Forgery Detection ==============
-def train_stage2(dataloader, model, criterion_auxcon, criterion_ce, optimizer, epoch, args):
-    """Train one epoch for Stage 2 (forgery detection)"""
+def det_fc1_group_lasso(model):
+    """Group sparsity over det_fc1 output dimensions; no new model parameters."""
+    last_linear = None
+    for module in reversed(model.det_fc1):
+        if isinstance(module, nn.Linear):
+            last_linear = module
+            break
+    if last_linear is None:
+        return next(model.parameters()).new_tensor(0.0)
+    return last_linear.weight.norm(p=2, dim=1).mean()
+
+
+# ============== Stage 2: Weight-only Feature Selection ==============
+def train_stage2_feature_selection(train_loader, model, criterion_contrast, optimizer, epoch, args):
+    """
+    Weight-only Stage 2 with a compact core-selection objective.
+    The model structure is unchanged: we fine-tune det_fc1/backbone weights only.
+
+    Kept losses:
+      1. SupCon on current homo features as the representation-learning body.
+      2. Fake-to-real-prototype margin to suppress fake features aligned to real-shared homo.
+      3. Weak real compact/view margins as guards, not a Stage 1 feature copy.
+      4. Real-over-fake activation ranking to keep real-effective dimensions alive.
+    """
+    model.train()
+
+    batch_time = AverageMeter()
+    data_time = AverageMeter()
+    losses = AverageMeter()
+    losses_contrast = AverageMeter()
+    losses_real_compact = AverageMeter()
+    losses_real_view = AverageMeter()
+    losses_fake_proto = AverageMeter()
+    losses_retain = AverageMeter()
+
+    end = time.time()
+    for idx, (images, imgs, labels) in enumerate(train_loader):
+        data_time.update(time.time() - end)
+
+        images = torch.cat([images[0], images[1]], dim=0)
+        if torch.cuda.is_available():
+            images = images.cuda(non_blocking=True)
+            labels = labels.cuda(non_blocking=True)
+        labels = labels.long()
+        bsz = labels.shape[0]
+
+        trace_features, _ = model.forward_det(images)
+        trace_features = F.normalize(trace_features, dim=1)
+        f1, f2 = torch.split(trace_features, [bsz, bsz], dim=0)
+        contrast_features = torch.cat([f1.unsqueeze(1), f2.unsqueeze(1)], dim=1)
+
+        contrast_loss = criterion_contrast(contrast_features, labels)
+
+        real_mask = labels == 0
+        fake_mask = labels == 1
+        zero = trace_features.new_tensor(0.0)
+        real_compact_loss = zero
+        real_view_loss = zero
+        fake_proto_loss = zero
+        retain_loss = zero
+
+        if real_mask.any():
+            real_features = contrast_features[real_mask]
+            real_flat = real_features.reshape(-1, real_features.size(-1))
+            real_proto = F.normalize(real_flat.mean(dim=0), dim=0).detach()
+
+            raw_real_compact_loss = 1.0 - torch.matmul(real_flat, real_proto).mean()
+            raw_real_view_loss = 1.0 - F.cosine_similarity(
+                real_features[:, 0], real_features[:, 1], dim=1
+            ).mean()
+            real_compact_loss = F.relu(raw_real_compact_loss - args.selection_real_compact_margin)
+            real_view_loss = F.relu(raw_real_view_loss - args.selection_real_view_margin)
+
+        if fake_mask.any() and real_mask.any():
+            fake_features = contrast_features[fake_mask]
+            fake_flat = fake_features.reshape(-1, fake_features.size(-1))
+            fake_to_real = torch.matmul(fake_flat, real_proto)
+            fake_proto_loss = F.relu(fake_to_real - args.selection_fake_margin).mean()
+
+            real_strength = contrast_features[real_mask].abs().mean(dim=(0, 1))
+            fake_strength = fake_features.abs().mean(dim=(0, 1))
+            retain_loss = -F.relu(real_strength - fake_strength).mean()
+
+        loss = (args.selection_contrast_weight * contrast_loss +
+                args.selection_fake_proto_weight * fake_proto_loss +
+                args.selection_real_compact_weight * real_compact_loss +
+                args.selection_real_view_weight * real_view_loss +
+                args.selection_retain_weight * retain_loss)
+
+        losses.update(loss.item(), bsz)
+        losses_contrast.update(contrast_loss.item(), bsz)
+        losses_real_compact.update(real_compact_loss.item(), bsz)
+        losses_real_view.update(real_view_loss.item(), bsz)
+        losses_fake_proto.update(fake_proto_loss.item(), bsz)
+        losses_retain.update(retain_loss.item(), bsz)
+
+        optimizer.zero_grad()
+        loss.backward()
+        optimizer.step()
+
+        batch_time.update(time.time() - end)
+        end = time.time()
+
+        if (idx + 1) % 10 == 0:
+            print('Select2Core: [{0}][{1}/{2}]\t'
+                  'BT {batch_time.val:.3f} ({batch_time.avg:.3f})\t'
+                  'loss {loss.val:.3f} ({loss.avg:.3f})\t'
+                  'supcon {con.val:.3f} realC {real_c.val:.3f} realV {real_v.val:.3f}\t'
+                  'fakeP {fake_p.val:.3f} retain {retain.val:.3f}'.format(
+                   epoch, idx + 1, len(train_loader), batch_time=batch_time,
+                   loss=losses, con=losses_contrast, real_c=losses_real_compact,
+                   real_v=losses_real_view, fake_p=losses_fake_proto,
+                   retain=losses_retain))
+            sys.stdout.flush()
+
+    return {
+        'loss': losses.avg,
+        'contrast': losses_contrast.avg,
+        'real_compact': losses_real_compact.avg,
+        'real_view': losses_real_view.avg,
+        'fake_proto': losses_fake_proto.avg,
+        'retain': losses_retain.avg,
+    }
+
+
+@torch.no_grad()
+def analyze_selected_features(model, dataloader, device):
+    """Post-hoc feature scores from existing det_fc1 weights and real/fake activations."""
+    model.eval()
+    real_sum = None
+    fake_sum = None
+    real_count = 0
+    fake_count = 0
+
+    for images, imgs, labels in dataloader:
+        imgs = imgs.to(device)
+        labels = labels.to(device)
+        trace_features, _ = model.forward_det(imgs)
+        strength = trace_features.abs()
+        real_mask = labels == 0
+        fake_mask = labels == 1
+        if real_sum is None:
+            real_sum = torch.zeros(strength.size(1), device=device)
+            fake_sum = torch.zeros(strength.size(1), device=device)
+        if real_mask.any():
+            real_sum += strength[real_mask].sum(dim=0)
+            real_count += int(real_mask.sum().item())
+        if fake_mask.any():
+            fake_sum += strength[fake_mask].sum(dim=0)
+            fake_count += int(fake_mask.sum().item())
+
+    real_mean = real_sum / max(real_count, 1)
+    fake_mean = fake_sum / max(fake_count, 1)
+
+    last_linear = None
+    for module in reversed(model.det_fc1):
+        if isinstance(module, nn.Linear):
+            last_linear = module
+            break
+    weight_score = last_linear.weight.norm(p=2, dim=1) if last_linear is not None else torch.ones_like(real_mean)
+    activation_score = F.relu(real_mean - fake_mean)
+    score = weight_score * activation_score
+    return {
+        'score': score.detach().cpu().numpy(),
+        'weight_score': weight_score.detach().cpu().numpy(),
+        'real_mean': real_mean.detach().cpu().numpy(),
+        'fake_mean': fake_mean.detach().cpu().numpy(),
+    }
+
+
+# ============== Stage 3: Forgery Detection ==============
+def train_stage3(dataloader, model, criterion_auxcon, criterion_ce, optimizer, epoch, args):
+    """Train one epoch for Stage 3 (forgery detection)"""
     train_loader, aux_loader = dataloader
     
     model.train()
@@ -429,7 +759,7 @@ def train_stage2(dataloader, model, criterion_auxcon, criterion_ce, optimizer, e
         
         # Print info
         # if (idx + 1) % 10 == 0:
-        #     print('Train2: [{0}][{1}/{2}]\\t'
+        #     print('Train3: [{0}][{1}/{2}]\\t'
         #           'BT {batch_time.val:.3f} ({batch_time.avg:.3f})\\t'
         #           'DT {data_time.val:.3f} ({data_time.avg:.3f})\\t'
         #           'loss {loss.val:.3f} ({loss.avg:.3f})'.format(
@@ -438,7 +768,7 @@ def train_stage2(dataloader, model, criterion_auxcon, criterion_ce, optimizer, e
         #     sys.stdout.flush()
         # Print info
         if (idx + 1) % 10 == 0:
-            print('Train2: [{0}][{1}/{2}]\t'
+            print('Train3: [{0}][{1}/{2}]\t'
                   'BT {batch_time.val:.3f} ({batch_time.avg:.3f})\t'
                   'DT {data_time.val:.3f} ({data_time.avg:.3f})\t'
                   'loss {loss.val:.3f} ({loss.avg:.3f})\t'
@@ -454,9 +784,9 @@ def train_stage2(dataloader, model, criterion_auxcon, criterion_ce, optimizer, e
 
 # ============== Evaluation Functions ==============
 @torch.no_grad()
-def evaluate_stage2(model, dataloader, device):
+def evaluate_stage3(model, dataloader, device):
     """
-    Evaluate Stage 2 model on detection task
+    Evaluate Stage 3 model on detection task
     Returns: dict with acc, ap, auc metrics
     """
     model.eval()
@@ -564,9 +894,21 @@ def evaluate_per_method(model, dataset_root, deepfake_methods, transform, device
     return results
 
 
+def summarize_method_metrics(method_metrics):
+    """Average per-method test metrics for model selection."""
+    if not method_metrics:
+        return {acc: 0.0, ap: 0.0, auc: 0.0}
+    return {
+        acc: float(np.mean([v[acc] for v in method_metrics.values()])),
+        ap: float(np.mean([v[ap] for v in method_metrics.values()])),
+        auc: float(np.mean([v[auc] for v in method_metrics.values()])),
+    }
+
+
 # ============== Main Training ==============
 def main():
     args = get_args()
+    validate_template_args(args)
     
     # Setup
     os.environ["CUDA_VISIBLE_DEVICES"] = args.gpu
@@ -587,7 +929,7 @@ def main():
             return
         
         print("=" * 60)
-        print("Face Forgery Detection Training (xudong_fine - Face Dataset)")
+        print("Three-Stage Face Forgery Training (weight-only selection - Face Dataset)")
         print("=" * 60)
         print(f"Dataset Root: {args.dataset_root}")
         print(f"Deepfake Methods: {len(deepfake_methods)}")
@@ -603,7 +945,8 @@ def main():
     
     print(f"Backbone: {args.backbone}")
     print(f"Stage 1: {args.stage1_epochs} epochs, batch={args.stage1_batch_size}, lr={args.stage1_lr}")
-    print(f"Stage 2: {args.stage2_epochs} epochs, batch={args.stage2_batch_size}, lr={args.stage2_lr}")
+    print(f"Stage 2: {args.stage2_epochs} epochs, batch={args.stage2_batch_size}, lr={args.stage2_lr} (feature selection)")
+    print(f"Stage 3: {args.stage3_epochs} epochs, batch={args.stage2_batch_size}, lr={args.stage3_lr} (forgery detection)")
     print("=" * 60)
     
     # ==================== Stage 1: Representation Learning ====================
@@ -871,6 +1214,84 @@ def main():
     print(f"[Data] Detection dataset: {len(train_dataset)} samples")
     print(f"[Data] Auxiliary dataset: {len(aux_dataset)} samples")
     
+    # ==================== Stage 2: Weight-only Feature Selection ====================
+    print("\n" + "=" * 60)
+    print("Stage 2: Feature Selection (fine-tune existing det_fc1 weights only)")
+    print("=" * 60)
+
+    for p in model.parameters():
+        p.requires_grad = False
+    for p in model.det_fc1.parameters():
+        p.requires_grad = True
+    if args.stage2_update_backbone:
+        for p in model.backbone.parameters():
+            p.requires_grad = True
+
+    stage2_params = [
+        {'params': model.det_fc1.parameters(), 'lr': args.stage2_lr},
+    ]
+    if args.stage2_update_backbone:
+        stage2_params.append({'params': model.backbone.parameters(), 'lr': args.stage2_lr_backbone})
+
+    optimizer_select = torch.optim.SGD(
+        stage2_params,
+        momentum=args.stage2_momentum,
+        weight_decay=args.stage2_weight_decay
+    )
+
+    loggerpath_select = os.path.join(args.savepath, 'stage2_core_select', f'path_tensorboard_{args.backbone}')
+    savefolder_select = os.path.join(args.savepath, 'stage2_core_select', f'path_models_{args.backbone}')
+    os.makedirs(loggerpath_select, exist_ok=True)
+    os.makedirs(savefolder_select, exist_ok=True)
+    logger_select = tb_logger.Logger(logdir=loggerpath_select, flush_secs=2) if tb_logger else None
+
+    best_select_loss = 100
+    for epoch in range(1, args.stage2_epochs + 1):
+        adjust_learning_rate(optimizer_select, epoch, lr=args.stage2_lr,
+                           lr_decay_rate=lr_decay_rate, total_epochs=args.stage2_epochs,
+                           cos=args.cosine)
+        time1 = time.time()
+        select_losses = train_stage2_feature_selection(train_loader, model, criterion_auxcon,
+                                                       optimizer_select, epoch, args)
+        time2 = time.time()
+        print(f"[Stage2Core] Epoch {epoch}, total time {time2 - time1:.2f}s, "
+              f"loss {select_losses['loss']:.4f}, fakeP {select_losses['fake_proto']:.4f}, "
+              f"realC {select_losses['real_compact']:.4f}, realV {select_losses['real_view']:.4f}, "
+              f"retain {select_losses['retain']:.4f}")
+        if logger_select:
+            for k, v in select_losses.items():
+                logger_select.log_value(k, v, epoch)
+
+        if select_losses['loss'] < best_select_loss:
+            best_select_loss = select_losses['loss']
+            torch.save({
+                'model': model.state_dict(),
+                'optimizer': optimizer_select.state_dict(),
+                'epoch': epoch,
+                'losses': select_losses,
+            }, os.path.join(savefolder_select, 'best_model.pth'))
+
+    feature_stats = analyze_selected_features(model, train_loader, device)
+    np.save(os.path.join(savefolder_select, 'feature_score.npy'), feature_stats['score'])
+    np.save(os.path.join(savefolder_select, 'feature_weight_score.npy'), feature_stats['weight_score'])
+    np.save(os.path.join(savefolder_select, 'feature_real_mean.npy'), feature_stats['real_mean'])
+    np.save(os.path.join(savefolder_select, 'feature_fake_mean.npy'), feature_stats['fake_mean'])
+    top_idx = np.argsort(-feature_stats['score'])[:20]
+    print(f"[Stage2] Completed! Best loss: {best_select_loss:.4f}")
+    print(f"[Feature Selection] Top-20 feature dims by weight-only score: {top_idx.tolist()}")
+
+    # ==================== Stage 3: Forgery Detection ====================
+    print("\n" + "=" * 60)
+    print("Stage 3: Forgery Detection (original model structure)")
+    print("=" * 60)
+
+    for p in model.parameters():
+        p.requires_grad = True
+    for p in model.aux_fc1.parameters():
+        p.requires_grad = False
+    for p in model.aux_fc2.parameters():
+        p.requires_grad = False
+
     # # Optimizer (only trainable parameters)
     # optimizer = torch.optim.SGD(
     #     filter(lambda p: p.requires_grad, model.parameters()),
@@ -880,7 +1301,7 @@ def main():
     # )
 
     # Optimizer with differential learning rates
-    fine_tune_lr = 1e-5  # 主干网络和 det_fc1 的极小微调学习率
+    fine_tune_lr = args.stage3_lr_backbone  # 主干网络和 det_fc1 的极小微调学习率
     
     backbone_params = []
     det_fc1_params = []
@@ -900,16 +1321,16 @@ def main():
     optimizer = torch.optim.SGD([
         {'params': backbone_params, 'lr': fine_tune_lr},
         {'params': det_fc1_params, 'lr': fine_tune_lr},
-        {'params': det_fc2_params, 'lr': args.stage2_lr}  # args.stage2_lr 默认就是 1e-2
-    ], momentum=args.stage2_momentum, weight_decay=args.stage2_weight_decay)
+        {'params': det_fc2_params, 'lr': args.stage3_lr}
+    ], momentum=args.stage3_momentum, weight_decay=args.stage3_weight_decay)
     
     # Learning rate schedule
-    total_epochs = args.stage2_epochs
-    learning_rate = args.stage2_lr
+    total_epochs = args.stage3_epochs
+    learning_rate = args.stage3_lr
     
     # Tensorboard logger
-    loggerpath = os.path.join(args.savepath, 'stage2_detnet_enhance', f'path_tensorboard_{args.backbone}')
-    savefolder = os.path.join(args.savepath, 'stage2_detnet_enhance', f'path_models_{args.backbone}')
+    loggerpath = os.path.join(args.savepath, 'stage3_detnet_enhance', f'path_tensorboard_{args.backbone}')
+    savefolder = os.path.join(args.savepath, 'stage3_detnet_enhance', f'path_models_{args.backbone}')
     os.makedirs(loggerpath, exist_ok=True)
     os.makedirs(savefolder, exist_ok=True)
     
@@ -932,7 +1353,7 @@ def main():
                            cos=args.cosine)
         
         time1 = time.time()
-        loss = train_stage2(dataloader, model, criterion_auxcon, criterion_ce, 
+        loss = train_stage3(dataloader, model, criterion_auxcon, criterion_ce, 
                            optimizer, epoch, args)
         time2 = time.time()
         
@@ -942,18 +1363,10 @@ def main():
         
         # Evaluation (every eval_interval epochs)
         if args.use_face_dataset and epoch % args.eval_interval == 0:
-            print(f"\n--- Stage2 Epoch {epoch}/{total_epochs} ---")
+            print(f"\n--- Stage3 Epoch {epoch}/{total_epochs} ---")
             
-            # Overall evaluation
-            metrics = evaluate_stage2(model, dataloader, device)
-            print(f"[Eval Overall] Acc: {metrics['acc']:.4f}, AP: {metrics['ap']:.4f}, AUC: {metrics['auc']:.4f}")
-            
-            if logger:
-                logger.log_value('eval_acc', metrics['acc'], epoch)
-                logger.log_value('eval_ap', metrics['ap'], epoch)
-                logger.log_value('eval_auc', metrics['auc'], epoch)
-            
-            # Per-method evaluation
+            # Test split evaluation. The old overall path used train_loader;
+            # here overall is the mean over per-method test metrics.
             eval_transform = transforms.Compose([
                 transforms.Resize(int(args.img_size * 1.14)),
                 transforms.CenterCrop(args.img_size),
@@ -965,8 +1378,15 @@ def main():
                 model, args.dataset_root, deepfake_methods,
                 eval_transform, device, batch_size=args.stage2_batch_size
             )
+            metrics = summarize_method_metrics(method_metrics)
+            print("[Eval Overall/Test] Acc: {:.4f}, AP: {:.4f}, AUC: {:.4f}".format(metrics["acc"], metrics["ap"], metrics["auc"]))
             
-            # Save best model based on accuracy
+            if logger:
+                logger.log_value("eval_acc", metrics["acc"], epoch)
+                logger.log_value("eval_ap", metrics["ap"], epoch)
+                logger.log_value("eval_auc", metrics["auc"], epoch)
+            
+            # Save best model based on test-split average accuracy
             if metrics['acc'] > best_acc:
                 best_acc = metrics['acc']
                 best_metrics = metrics
@@ -979,7 +1399,7 @@ def main():
                     'method_metrics': method_metrics,
                 }
                 torch.save(state, os.path.join(savefolder, 'best_model_acc.pth'))
-                print(f"[Save] Best model saved (acc={best_acc:.4f})")
+                print(f"[Save] Best model saved by test average acc={best_acc:.4f}")
         
         # Save checkpoints
         if epoch % 20 == 0:
@@ -1007,7 +1427,7 @@ def main():
             }
             torch.save(state, os.path.join(savefolder, 'final_epoch.pth'))
     
-    print(f"\\n[Stage 2] Completed! Best loss: {best_loss:.4f}")
+    print(f"\\n[Stage 3] Completed! Best loss: {best_loss:.4f}")
     print("\\n" + "=" * 60)
     print("Training Completed!")
     print(f"Models saved to: {args.savepath}")
