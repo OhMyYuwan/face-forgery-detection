@@ -1,62 +1,44 @@
-# Face Forgery Detection
+# Face & Audio Forgery Detection
 
 <div align="center">
   <img src="assets/github-header-banner.png" alt="SuperLeaf Banner" width="100%">
 </div>
 
 
-Image forgery detection system.
+Image and audio forgery detection system based on natural trace extraction and filtering.
 
 ## HuggingFace Resources
 
-- Model Weights: [OhMyYuwan/face-forgery-detection](https://huggingface.co/OhMyYuwan/face-forgery-detection)
+- Image Model Weights: [OhMyYuwan/face-forgery-detection](https://huggingface.co/OhMyYuwan/face-forgery-detection)
+- Audio Model Weights: [OhMyYuwan/audio-forgery-detection](https://huggingface.co/OhMyYuwan/audio-forgery-detection)
 - Space Demo: [OhMyYuwan/face-forgery-detection](https://huggingface.co/spaces/OhMyYuwan/face-forgery-detection)
 
 ## Project Structure
 
 ```
 face-forgery-detection/
-├── datasets/                  # Dataset
-│   ├── train/
-│   └── test/
-├── OhMyYuwan/                 # Model registry and weights
-│   └── face-forgery-detection/
-│       ├── convnext_base/
-│       │   ├── config.json
-│       │   ├── model.py
-│       │   └── pytorch_model.bin
-│       ├── dinov2_base/
-│       ├── fastervit_2/
-│       ├── inceptionnext_base/
-│       ├── internvit_300m/
-│       ├── mambavision_t/
-│       ├── maxvit_base/
-│       ├── registry.json
-│       └── optimal_thresholds.json
-├── scripts/                   # Evaluation and training scripts
-│   ├── evaluation/
-│   │   ├── evaluate.py
-│   │   ├── evaluate_ensemble.py
-│   │   ├── optimize_thresholds.py
-│   │   └── view_results.py
-│   └── train/
-│       ├── train_face_forgery.py
-│       ├── train_natural_trace.py
-│       ├── run.sh
-│       └── run_stage2.sh
-├── Space/                     # Gradio demo application
-│   ├── app.py
-│   ├── compat_patches.py
-│   └── test_all_models.py
+├── datasets/
+│   ├── image/                     # Image datasets
+│   └── audio/                     # Audio datasets
+│       └── asvspoof2019_la/
+├── OhMyYuwan/
+│   ├── face-forgery-detection/    # Image model registry and weights
+│   └── audio-forgery-detection/   # Audio model registry and weights
+├── scripts/
+│   ├── image/                     # Image evaluation and training scripts
+│   │   ├── evaluation/
+│   │   └── train/
+│   └── audio/                     # Audio evaluation and training scripts
+│       ├── evaluation/
+│       └── train/
+├── Space/                         # Gradio demo application
 ├── results/
-│   ├── evaluate/              # Evaluation outputs
-│   └── train/                 # Training outputs
-├── evaluate_parallel.sh       # Parallel evaluation script
-├── space_manager.sh           # Gradio space management script
+├── evaluate_parallel.sh
+├── space_manager.sh
 └── README.md
 ```
 
-## Models
+## Image Models
 
 | Model | Backbone | Input Size |
 |-------|----------|------------|
@@ -67,6 +49,12 @@ face-forgery-detection/
 | internvit_300m | InternViT-300M | 448x448 |
 | mambavision_t | MambaVision-T | 224x224 |
 | maxvit_base | MaxViT-Base | 224x224 |
+
+## Audio Models
+
+| Model | Backbone | EER |
+|-------|----------|-----|
+| wav2vec2_base | facebook/wav2vec2-base | 0.10% |
 
 ## Quick Start
 
@@ -141,16 +129,16 @@ with torch.no_grad():
     score = torch.sigmoid(det).item()
 ```
 
-## Training Scripts
+## Image Training Scripts
 
-All training scripts are located in [scripts/train/](scripts/train/). The framework adopts a **two-stage** strategy: first learn homogeneous features from real images, then train the forgery detector on real/fake pairs.
+All image training scripts are located in [scripts/image/train/](scripts/image/train/). The framework adopts a **two-stage** strategy: first learn homogeneous features from real images, then train the forgery detector on real/fake pairs.
 
 | Script | 功能 | 用法 | 输出 |
 |--------|------|------|------|
-| [scripts/train/train_face_forgery.py](scripts/train/train_face_forgery.py) | 两阶段训练主脚本（Stage 1 表示学习 + Stage 2 伪造检测） | `python scripts/train/train_face_forgery.py --gpu 0 --dataset_root <path> --backbone <name>` | `<savepath>/stage1_models_<backbone>/` + `<savepath>/stage2_detnet_enhance/path_models_<backbone>/` |
-| [scripts/train/train_natural_trace.py](scripts/train/train_natural_trace.py) | 训练基础组件（`OurNet`、`SupConLoss`、数据增强、LR 调度等），被主脚本导入 | 不直接运行 | - |
-| [scripts/train/run.sh](scripts/train/run.sh) | 端到端启动 Stage 1 + Stage 2 完整训练 | `bash scripts/train/run.sh` | `log/xinyuan_MambaVision_gpu<id>.log` + 模型权重 |
-| [scripts/train/run_stage2.sh](scripts/train/run_stage2.sh) | 仅启动 Stage 2，基于已有 Stage 1 预训练模型 | `bash scripts/train/run_stage2.sh` | 同上 |
+| [scripts/image/train/train_face_forgery.py](scripts/image/train/train_face_forgery.py) | 两阶段训练主脚本（Stage 1 表示学习 + Stage 2 伪造检测） | `python scripts/image/train/train_face_forgery.py --gpu 0 --dataset_root <path> --backbone <name>` | `<savepath>/stage1_models_<backbone>/` + `<savepath>/stage2_detnet_enhance/path_models_<backbone>/` |
+| [scripts/image/train/train_natural_trace.py](scripts/image/train/train_natural_trace.py) | 训练基础组件（`OurNet`、`SupConLoss`、数据增强、LR 调度等），被主脚本导入 | 不直接运行 | - |
+| [scripts/image/train/run.sh](scripts/image/train/run.sh) | 端到端启动 Stage 1 + Stage 2 完整训练 | `bash scripts/image/train/run.sh` | `log/xinyuan_MambaVision_gpu<id>.log` + 模型权重 |
+| [scripts/image/train/run_stage2.sh](scripts/image/train/run_stage2.sh) | 仅启动 Stage 2，基于已有 Stage 1 预训练模型 | `bash scripts/image/train/run_stage2.sh` | 同上 |
 
 ### Two-Stage Training Pipeline
 
@@ -171,7 +159,7 @@ All training scripts are located in [scripts/train/](scripts/train/). The framew
 - `SupConLoss`：基于真伪标签的有监督对比损失（权重 1.0）
 - `BCEWithLogitsLoss`：二分类检测损失（权重 0.5）
 
-主干 + `det_fc1` 使用极小微调学习率（`1e-5`），分类头 `det_fc2` 使用 `stage2_lr`（默认 `1e-2`），避免大幅扰动 Stage 1 学到的表征。
+主干 + `det_fc1` 使用极小微调学习率（`1e-5`），分类头 `det_fc2` 使用 `stage2_lr`（默认 `1e-2`），避免大幅扰动 Stage 1 学到的自然痕迹表征。
 
 ### Dataset Layout
 
@@ -205,16 +193,15 @@ BACKBONE="mambavision_t"               # 见 Models 表格
 **2. 启动两阶段完整训练**
 
 ```bash
-cd scripts/train
-bash run.sh
+bash scripts/image/train/run.sh
 ```
 
 **3. 仅执行 Stage 2（已有 Stage 1 权重）**
 
-修改 `run_stage2.sh` 中的 `STAGE1_MODEL` 指向 Stage 1 产出的 `.pth`，然后：
+修改 `scripts/image/train/run_stage2.sh` 中的 `STAGE1_MODEL` 指向 Stage 1 产出的 `.pth`，然后：
 
 ```bash
-bash run_stage2.sh
+bash scripts/image/train/run_stage2.sh
 ```
 
 **4. 监控训练**
@@ -258,15 +245,15 @@ watch -n 1 nvidia-smi                       # GPU 状态
 
 ## Evaluation Scripts
 
-All evaluation scripts are located in `scripts/evaluation/`.
+All evaluation scripts are located in `scripts/image/evaluation/`.
 
 | Script | 功能 | 用法 | 输出 |
 |--------|------|------|------|
-| `evaluate_parallel.sh` | 并行评估所有模型（自动分配多GPU） | `bash evaluate_parallel.sh` | `scripts/evaluation/results/{model}/metrics.json` + `results/evaluate/logs/*.log` |
-| `scripts/evaluation/evaluate.py` | 评估单个模型 | `python scripts/evaluation/evaluate.py --model internvit_300m --device cuda` | `scripts/evaluation/results/{model}/metrics.json` |
-| `scripts/evaluation/evaluate_ensemble.py` | 评估模型组合性能（加权平均 / 投票法） | `python scripts/evaluation/evaluate_ensemble.py --models m1 m2 --method voting` | `scripts/evaluation/results/ensemble/*.json` |
-| `scripts/evaluation/optimize_thresholds.py` | 为每个模型搜索最优检测阈值 | `python scripts/evaluation/optimize_thresholds.py` | `OhMyYuwan/face-forgery-detection/optimal_thresholds.json` |
-| `scripts/evaluation/view_results.py` | 快速查看所有模型的评估结果 | `python scripts/evaluation/view_results.py` | 终端表格输出 |
+| `evaluate_parallel.sh` | 并行评估所有模型（自动分配多GPU） | `bash evaluate_parallel.sh` | `results/evaluate/logs/*.log` |
+| `scripts/image/evaluation/evaluate.py` | 评估单个模型 | `python scripts/image/evaluation/evaluate.py --model internvit_300m --device cuda` | `results/evaluate/{model}/metrics.json` |
+| `scripts/image/evaluation/evaluate_ensemble.py` | 评估模型组合性能（加权平均 / 投票法） | `python scripts/image/evaluation/evaluate_ensemble.py --models m1 m2 --method voting` | `results/evaluate/ensemble/*.json` |
+| `scripts/image/evaluation/optimize_thresholds.py` | 为每个模型搜索最优检测阈值 | `python scripts/image/evaluation/optimize_thresholds.py` | `OhMyYuwan/face-forgery-detection/optimal_thresholds.json` |
+| `scripts/image/evaluation/view_results.py` | 快速查看所有模型的评估结果 | `python scripts/image/evaluation/view_results.py` | 终端表格输出 |
 
 ### Evaluation Workflow
 
@@ -277,19 +264,19 @@ bash evaluate_parallel.sh
 
 **2. 优化检测阈值**
 ```bash
-python scripts/evaluation/optimize_thresholds.py
+python scripts/image/evaluation/optimize_thresholds.py
 ```
 
 **3. 评估模型组合**
 ```bash
 # 投票法
-python scripts/evaluation/evaluate_ensemble.py --models convnext_base fastervit_2 inceptionnext_base --method voting
+python scripts/image/evaluation/evaluate_ensemble.py --models convnext_base fastervit_2 inceptionnext_base --method voting
 
 # 加权平均
-python scripts/evaluation/evaluate_ensemble.py --models convnext_base fastervit_2 inceptionnext_base --method weighted
+python scripts/image/evaluation/evaluate_ensemble.py --models convnext_base fastervit_2 inceptionnext_base --method weighted
 ```
 
 **4. 查看结果**
 ```bash
-python scripts/evaluation/view_results.py
+python scripts/image/evaluation/view_results.py
 ```

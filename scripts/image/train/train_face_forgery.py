@@ -48,7 +48,7 @@ def get_args():
     # Basic config
     parser.add_argument('--gpu', type=str, default='0')
     parser.add_argument('--seed', type=int, default=42)
-    parser.add_argument('--savepath', type=str, default='/zyy/TIFS2026/yuwanz')
+    parser.add_argument('--savepath', type=str, default='results/image')
     parser.add_argument('--stage1_model', type=str, default='')
     
     # Dataset config - Face-specific
